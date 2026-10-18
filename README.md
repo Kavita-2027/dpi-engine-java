@@ -28,7 +28,10 @@ pcap -> parser -> flow table -> extract -> classify/rules -> writer
 ## Testing
 14 unit tests (`mvn test`) covering the PCAP reader/writer, flow keys,
 SNI/Host extraction, classification and rules.
-[Add your own Wireshark verification result here once you've done it.]
+
+Verified in Wireshark: the sample capture has 77 packets; with
+`--block-app YouTube --block-domain facebook.com` the output has 75. The
+YouTube Client Hello is present in the input and absent from the output.
 
 ## Limitations
 - IPv4 over Ethernet only (no IPv6, VLAN, or fragment reassembly)
