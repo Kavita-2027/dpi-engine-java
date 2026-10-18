@@ -1,0 +1,18 @@
+# Maven build output
+target/
+
+# IntelliJ
+.idea/
+*.iml
+out/
+
+# VS Code
+.vscode/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Packet captures and generated output (can contain private traffic)
+*.pcap
+*.pcapng
