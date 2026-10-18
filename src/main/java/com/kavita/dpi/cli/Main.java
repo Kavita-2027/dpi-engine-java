@@ -1,6 +1,8 @@
 package com.kavita.dpi.cli;
 
+import com.kavita.dpi.concurrent.ParallelEngine;
 import com.kavita.dpi.engine.DpiEngine;
+import com.kavita.dpi.engine.Report;
 import com.kavita.dpi.engine.RuleSet;
 import com.kavita.dpi.model.AppType;
 import com.kavita.dpi.pcap.PcapFormatException;
@@ -15,6 +17,9 @@ public class Main {
     public static void main(String[] args) throws Exception {
         String file = "test_dpi.pcap";
         String output = null;
+        boolean parallel = false;
+        int groups = 2;
+        int workers = 2;
         RuleSet rules = new RuleSet();
 
         int i = 0;
@@ -27,6 +32,9 @@ public class Main {
                 case "--block-ip" -> rules.blockIp(value(args, ++i));
                 case "--block-domain" -> rules.blockDomain(value(args, ++i));
                 case "--output" -> output = value(args, ++i);
+                case "--parallel" -> parallel = true;
+                case "--groups" -> { groups = positive(args, ++i); parallel = true; }
+                case "--workers" -> { workers = positive(args, ++i); parallel = true; }
                 case "--block-app" -> {
                     String name = value(args, ++i);
                     rules.blockApp(AppType.parse(name)
@@ -36,7 +44,7 @@ public class Main {
             }
         }
 
-        DpiEngine engine = new DpiEngine(rules);
+        long start = System.nanoTime();
         try (PcapReader reader = PcapReader.open(Path.of(file))) {
             if (reader.header().linkType() != 1) {
                 throw new PcapFormatException("Only Ethernet captures are supported (link type "
@@ -46,24 +54,41 @@ public class Main {
                     ? null
                     : PcapWriter.create(Path.of(output), reader.header());
             try {
-                Optional<RawPacket> next = reader.readNextPacket();
-                while (next.isPresent()) {
-                    DpiEngine.Verdict verdict = engine.process(next.get());
-                    if (writer != null && verdict == DpiEngine.Verdict.FORWARD) {
-                        writer.write(next.get());
+                if (parallel) {
+                    ParallelEngine.Outcome out =
+                            new ParallelEngine(rules, groups, workers).run(reader, writer);
+                    System.out.print(Report.format(out.stats(), out.flows()));
+                    System.out.println("\nThreads: " + groups + " groups x " + workers + " workers");
+                    out.threadLines().forEach(line -> System.out.println("  " + line));
+                } else {
+                    DpiEngine engine = new DpiEngine(rules);
+                    Optional<RawPacket> next = reader.readNextPacket();
+                    while (next.isPresent()) {
+                        DpiEngine.Verdict verdict = engine.process(next.get());
+                        if (writer != null && verdict == DpiEngine.Verdict.FORWARD) {
+                            writer.write(next.get());
+                        }
+                        next = reader.readNextPacket();
                     }
-                    next = reader.readNextPacket();
+                    System.out.print(engine.report());
                 }
             } finally {
                 if (writer != null) writer.close();
             }
         }
-        System.out.print(engine.report());
-        if (output != null) System.out.println("\nOutput written to: " + output);
+        double ms = (System.nanoTime() - start) / 1_000_000.0;
+        System.out.printf("%nElapsed: %.1f ms%n", ms);
+        if (output != null) System.out.println("Output written to: " + output);
     }
 
     private static String value(String[] args, int i) {
         if (i >= args.length) throw new IllegalArgumentException("Missing value for " + args[i - 1]);
         return args[i];
+    }
+
+    private static int positive(String[] args, int i) {
+        int n = Integer.parseInt(value(args, i));
+        if (n < 1) throw new IllegalArgumentException(args[i - 1] + " must be at least 1");
+        return n;
     }
 }

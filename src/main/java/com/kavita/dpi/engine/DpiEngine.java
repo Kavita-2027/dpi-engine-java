@@ -8,9 +8,7 @@ import com.kavita.dpi.parser.PacketParseException;
 import com.kavita.dpi.parser.PacketParser;
 import com.kavita.dpi.pcap.RawPacket;
 
-import java.util.Comparator;
-import java.util.EnumMap;
-import java.util.Map;
+import java.util.Collection;
 import java.util.Optional;
 
 public final class DpiEngine {
@@ -18,43 +16,53 @@ public final class DpiEngine {
 
     private final RuleSet rules;
     private final FlowTable flows = new FlowTable();
-    private final Map<AppType, Long> appPackets = new EnumMap<>(AppType.class);
-    private long total, bytes, tcp, udp, other, malformed, forwarded, dropped;
+    private final Stats stats = new Stats();
 
     public DpiEngine(RuleSet rules) { this.rules = rules; }
 
+    /** Single-threaded convenience: parse, then process. */
     public Verdict process(RawPacket raw) {
-        total++;
-        bytes += raw.data().length;
-
-        ParsedPacket pp;
         try {
             Optional<ParsedPacket> parsed = PacketParser.parse(raw);
-            if (parsed.isEmpty()) {
-                other++;
-                forwarded++;
-                return Verdict.FORWARD;
-            }
-            pp = parsed.get();
+            if (parsed.isEmpty()) return recordUnsupported(raw);
+            return processParsed(raw, parsed.get());
         } catch (PacketParseException e) {
-            malformed++;
-            dropped++;
-            return Verdict.DROP;
+            return recordMalformed(raw);
         }
+    }
 
-        if (pp.protocol() == 6) tcp++; else udp++;
+    public Verdict recordMalformed(RawPacket raw) {
+        stats.total++;
+        stats.bytes += raw.data().length;
+        stats.malformed++;
+        stats.dropped++;
+        return Verdict.DROP;
+    }
+
+    public Verdict recordUnsupported(RawPacket raw) {
+        stats.total++;
+        stats.bytes += raw.data().length;
+        stats.other++;
+        stats.forwarded++;
+        return Verdict.FORWARD;
+    }
+
+    public Verdict processParsed(RawPacket raw, ParsedPacket pp) {
+        stats.total++;
+        stats.bytes += raw.data().length;
+        if (pp.protocol() == 6) stats.tcp++; else stats.udp++;
 
         Flow flow = flows.update(pp, raw.data().length);
         classify(flow, pp, raw.data());
         if (!flow.blocked() && rules.isBlocked(flow)) flow.setBlocked(true);
 
-        appPackets.merge(flow.appType(), 1L, Long::sum);
+        stats.countApp(flow.appType());
 
         if (flow.blocked()) {
-            dropped++;
+            stats.dropped++;
             return Verdict.DROP;
         }
-        forwarded++;
+        stats.forwarded++;
         return Verdict.FORWARD;
     }
 
@@ -86,25 +94,7 @@ public final class DpiEngine {
         return AppType.UNKNOWN;
     }
 
-    public String report() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format("Total packets: %d  (%d bytes)%n", total, bytes));
-        sb.append(String.format("TCP: %d  UDP: %d  Other: %d  Malformed: %d%n", tcp, udp, other, malformed));
-        sb.append(String.format("Forwarded: %d  Dropped: %d%n", forwarded, dropped));
-        sb.append(String.format("Flows: %d%n%n", flows.size()));
-
-        sb.append("Application breakdown (packets):\n");
-        appPackets.entrySet().stream()
-                .sorted(Map.Entry.<AppType, Long>comparingByValue().reversed())
-                .forEach(e -> sb.append(String.format("  %-11s %4d  (%.1f%%)%n",
-                        e.getKey(), e.getValue(), 100.0 * e.getValue() / total)));
-
-        sb.append("\nDetected domains:\n");
-        flows.all().stream()
-                .filter(f -> f.hostname() != null)
-                .sorted(Comparator.comparing(Flow::hostname))
-                .forEach(f -> sb.append(String.format("  %-24s -> %-10s %s%n",
-                        f.hostname(), f.appType(), f.blocked() ? "(BLOCKED)" : "")));
-        return sb.toString();
-    }
+    public Stats stats() { return stats; }
+    public Collection<Flow> flows() { return flows.all(); }
+    public String report() { return Report.format(stats, flows.all()); }
 }
