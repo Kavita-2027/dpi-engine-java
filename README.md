@@ -23,7 +23,18 @@ Requires JDK 21 and Maven.
     java -cp target/classes com.kavita.dpi.cli.Main capture.pcap --block-app YouTube --block-domain facebook.com --output filtered.pcap
 
 ## Design
-pcap -> parser -> flow table -> extract -> classify/rules -> writer
+```mermaid
+flowchart LR
+  A[PCAP file] --> B[PcapReader]
+  B --> C["PacketParser<br/>Ethernet / IPv4 / TCP / UDP"]
+  C --> D["FlowTable<br/>bidirectional FlowKey"]
+  D --> E["SNI / HTTP Host<br/>extractors"]
+  E --> F[AppClassifier]
+  F --> G[RuleSet]
+  G -->|forward| H[PcapWriter]
+  G -->|drop| I[Dropped counter]
+  G --> J[Report]
+```
 
 ## Testing
 14 unit tests (`mvn test`) covering the PCAP reader/writer, flow keys,
